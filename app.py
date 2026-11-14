@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, HTTPException  # pyright: ignore[reportMissingImports]
+from fastapi import FastAPI, HTTPException, Response  # pyright: ignore[reportMissingImports]
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 import os
@@ -13,10 +14,12 @@ client = MongoClient(os.getenv("MONGODB_URI"), tz_aware=True)
 db = client["tutorial6"]
 devices = db["devices"]
 readings = db["readings"]
+settings = db["settings"]
 
 devices.create_index([("mac", ASCENDING)], unique=True)
 
 app = FastAPI()
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 class Device(BaseModel):
     mac: str
@@ -26,6 +29,9 @@ class Device(BaseModel):
 class Reading(BaseModel):
     mac: str
     temp: float
+
+class Settings(BaseModel):
+    temp_limit: float
 
 @app.get("/devices")
 def get_devices():
@@ -78,3 +84,20 @@ def get_latest_reading(mac: str | None = None):
     if reading is None:
         raise HTTPException(status_code=404, detail="No readings yet")
     return reading
+
+@app.put("/settings/{mac}")
+def put_settings(mac: str, new: Settings, response: Response):
+    doc = new.model_dump()
+    doc["mac"] = mac
+    result = settings.replace_one({"mac": mac}, doc, upsert=True)
+    if result.upserted_id is not None:
+        response.status_code = 201
+    doc.pop("_id", None)
+    return doc
+
+@app.get("/settings/{mac}")
+def get_settings(mac: str):
+    doc = settings.find_one({"mac": mac}, {"_id": 0})
+    if doc is None:
+        raise HTTPException(status_code=404, detail="No settings for MAC " + mac)
+    return doc
